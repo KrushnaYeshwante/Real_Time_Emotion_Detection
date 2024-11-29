@@ -1,0 +1,109 @@
+import numpy as np
+import pyaudio
+import tensorflow as tf
+import librosa
+import matplotlib.pyplot as plt
+from collections import Counter
+import os
+from datetime import datetime
+
+# Load the pre-trained model
+model_path = r'C:\Users\HP\Desktop\KY Project\SER_folder\speech_emotion_recognition_model25.keras'
+model = tf.keras.models.load_model(model_path)
+
+# Define the emotion labels according to your dataset
+emotion_labels = ['anger', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'sarcastic','surprise']  # Update if needed
+
+
+# Audio recording parameters
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 22050
+RECORD_SECONDS = 3
+
+# Initialize PyAudio
+p = pyaudio.PyAudio()
+
+
+def extract_features(audio_chunk, sample_rate=RATE):
+    # Normalize the audio chunk
+    audio_chunk = audio_chunk / np.max(np.abs(audio_chunk))
+
+    # Extract MFCCs
+    mfccs = librosa.feature.mfcc(y=audio_chunk, sr=sample_rate, n_mfcc=40)
+    mfccs_mean = np.mean(mfccs.T, axis=0)
+    return mfccs_mean
+
+
+def predict_emotion(audio_chunk):
+    features = extract_features(audio_chunk)
+    features = features.reshape(1, 40, 1, 1)  # Reshape for the model
+    prediction = model.predict(features)
+    emotion = np.argmax(prediction)
+    print(f"Model Prediction: {prediction} (Predicted Index: {emotion})")  # Debug line
+    return emotion_labels[emotion]
+
+
+
+def main():
+    stream = p.open(format=FORMAT,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK)
+
+    print("Recording started. Press Ctrl+C to stop.")
+
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = os.path.join(r'C:\Users\HP\Desktop\KY Project\SER_folder\outputofmodel', f'session_{session_id}')
+    os.makedirs(session_dir, exist_ok=True)
+
+    emotion_counter = Counter()
+
+    try:
+        while True:
+            frames = []
+            for _ in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
+                data = stream.read(CHUNK)
+                frames.append(np.frombuffer(data, dtype=np.int16))
+
+            audio_chunk = np.hstack(frames)
+            emotion = predict_emotion(audio_chunk)
+            emotion_counter[emotion] += 1
+
+            print(f"Predicted Emotion: {emotion}")
+            if emotion in ['angry', 'disgust']:
+                print(f"ALERT: You are being {emotion}!")
+
+            # Save detected emotion to a log file
+            with open(os.path.join(session_dir, "emotion_log.csv"), 'a') as log_file:
+                log_file.write(f"{datetime.now()},{emotion}\n")
+
+    except KeyboardInterrupt:
+        print("\nRecording stopped.")
+
+    finally:
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+        # Plot overall emotion distribution
+        if emotion_counter:
+            labels, values = zip(*emotion_counter.items())
+            plt.figure(figsize=(8, 6))
+            plt.pie(values, labels=labels, autopct='%1.1f%%', startangle=140)
+            plt.title('Overall Time Spent in Each Emotion')
+            plt.show()
+
+        # Save session summary
+        summary_file = os.path.join(session_dir, "session_summary.csv")
+        with open(summary_file, 'w') as summary:
+            for emotion, count in emotion_counter.items():
+                summary.write(f"{emotion},{count}\n")
+
+        print(f"Session data saved in {session_dir}")
+
+
+if __name__ == "__main__":
+    main()
